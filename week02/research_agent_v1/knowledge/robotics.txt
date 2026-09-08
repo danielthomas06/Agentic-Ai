@@ -1,0 +1,11 @@
+Visual odometry estimates a camera's motion by analyzing consecutive images.
+
+Feature-based visual odometry detects distinctive image features and tracks them across frames.
+
+Optical flow can also be used to estimate motion between consecutive frames.
+
+Visual odometry is commonly used in robotics, drones, autonomous vehicles, and augmented reality.
+
+GPS-denied navigation systems can combine visual odometry with inertial measurements to estimate vehicle motion when GPS is unavailable.
+
+SLAM extends visual odometry by simultaneously estimating the robot's trajectory and building a map of the environment.
