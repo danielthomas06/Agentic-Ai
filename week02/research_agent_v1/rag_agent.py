@@ -5,8 +5,9 @@ from config import (
     MODEL,
 )
 
-from retrieval import (
-    load_documents,
+from semantic_retrieval import (
+    load_chunks,
+    create_embeddings,
     retrieve,
 )
 
@@ -33,33 +34,53 @@ def call_llm(prompt: str):
     return response.json()["message"]["content"]
 
 
-def answer_question(question: str):
-
-    documents = load_documents()
+def answer_question(
+    question,
+    chunks,
+    embeddings,
+):
 
     results = retrieve(
         question,
-        documents,
+        chunks,
+        embeddings,
+        top_k=3,
     )
 
     if not results:
-        return "I couldn't find relevant information."
+        return "No relevant information found."
+
+    context_parts = []
+
+    for result in results:
+
+        context_parts.append(
+            f"Source: {result['source']}\n"
+            f"Relevance: {result['score']:.4f}\n"
+            f"Content: {result['text']}"
+        )
 
     context = "\n\n".join(
-        result["text"]
-        for result in results[:3]
+        context_parts
     )
 
     prompt = f"""
-Answer the question using ONLY the provided context.
+You are a research assistant.
 
-If the answer is not contained in the context,
-say that the information is not available.
+Answer the question using ONLY the
+provided evidence.
 
-Context:
+If the evidence does not contain enough
+information, say so explicitly.
+
+Do not invent facts.
+
+Evidence:
+
 {context}
 
 Question:
+
 {question}
 """
 
@@ -68,9 +89,31 @@ Question:
 
 if __name__ == "__main__":
 
-    question = input("Question: ")
+    print("Loading knowledge base...")
 
-    answer = answer_question(question)
+    chunks = load_chunks()
+
+    print(
+        f"Loaded {len(chunks)} chunks."
+    )
+
+    print("Creating embeddings...")
+
+    embeddings = create_embeddings(
+        chunks
+    )
+
+    print("Ready.")
+
+    question = input(
+        "\nQuestion: "
+    )
+
+    answer = answer_question(
+        question,
+        chunks,
+        embeddings,
+    )
 
     print("\nAnswer:")
     print(answer)
