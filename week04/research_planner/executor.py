@@ -1,10 +1,16 @@
 from dataclasses import dataclass, field
 from typing import Any
-
+import json
 import requests
-
 import sys
 from pathlib import Path
+
+from models import Plan, PlanStep
+
+
+# ============================================================
+# WEEK 3 IMPORTS
+# ============================================================
 
 WEEK3_ROOT = (
     Path(__file__).resolve().parents[2]
@@ -20,6 +26,11 @@ from retrieval.vector_store import VectorStore
 from retrieval.hybrid_search import HybridRetriever
 from retrieval.reranker import Reranker
 
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 MAX_RETRIES = 2
 MAX_STEPS = 10
 
@@ -31,18 +42,23 @@ KNOWLEDGE_FILE = (
 )
 
 
+# ============================================================
+# EXECUTION STATE
+# ============================================================
+
 @dataclass
 class ExecutionState:
     results: dict[int, Any] = field(default_factory=dict)
     status: dict[int, str] = field(default_factory=dict)
+    errors: dict[int, str] = field(default_factory=dict)
+    attempts: dict[int, int] = field(default_factory=dict)
 
     def initialize(self, plan: Plan):
-
         for step in plan.steps:
             self.status[step.id] = "pending"
+            self.attempts[step.id] = 0
 
     def can_execute(self, step: PlanStep) -> bool:
-
         return all(
             self.status.get(dep) == "completed"
             for dep in step.depends_on
@@ -65,15 +81,25 @@ class ExecutionState:
         error: str,
     ):
         self.status[step_id] = "failed"
+        self.errors[step_id] = error
 
         self.results[step_id] = {
             "error": error
         }
 
+    def reset_for_retry(self, step_id: int):
+        self.status[step_id] = "pending"
+
+
+# ============================================================
+# EXECUTOR
+# ============================================================
 
 class Executor:
 
     def __init__(self):
+
+        print("[EXECUTOR] Loading knowledge base...")
 
         documents = prepare_document(
             KNOWLEDGE_FILE
@@ -92,7 +118,17 @@ class Executor:
 
         self.reranker = Reranker()
 
-    def ask_llm(self, prompt: str) -> str:
+        print("[EXECUTOR] Ready.")
+
+    # ========================================================
+    # LLM
+    # ========================================================
+
+    def ask_llm(
+        self,
+        prompt: str,
+        timeout: int = 180,
+    ) -> str:
 
         response = requests.post(
             OLLAMA_URL,
@@ -106,7 +142,7 @@ class Executor:
                 ],
                 "stream": False,
             },
-            timeout=120,
+            timeout=timeout,
         )
 
         response.raise_for_status()
@@ -115,21 +151,27 @@ class Executor:
             "message"
         ]["content"]
 
+    # ========================================================
+    # RESEARCH
+    # ========================================================
+
     def research(
         self,
         task: str,
     ) -> dict:
 
+        print("[RESEARCH] Retrieving documents...")
+
         candidates = self.retriever.search(
             task,
-            top_k=10,
-            candidate_k=10,
+            top_k=8,
+            candidate_k=8,
         )
 
         results = self.reranker.rerank(
             task,
             candidates,
-            top_k=5,
+            top_k=4,
         )
 
         context = []
@@ -162,6 +204,36 @@ class Executor:
             "context": "\n\n".join(context),
         }
 
+    # ========================================================
+    # COMPACT DEPENDENCY CONTEXT
+    # ========================================================
+
+    def build_dependency_context(
+        self,
+        step: PlanStep,
+        state: ExecutionState,
+    ) -> str:
+
+        sections = []
+
+        for dep_id in step.depends_on:
+
+            result = state.results.get(dep_id)
+
+            if result is None:
+                continue
+
+            sections.append(
+                f"RESULT FROM STEP {dep_id}:\n"
+                f"{result}"
+            )
+
+        return "\n\n".join(sections)
+
+    # ========================================================
+    # STEP EXECUTION
+    # ========================================================
+
     def execute_step(
         self,
         step: PlanStep,
@@ -176,10 +248,9 @@ class Executor:
             f"[EXECUTOR] {step.task}"
         )
 
-        dependencies = {
-            dep: state.results[dep]
-            for dep in step.depends_on
-        }
+        # ----------------------------------------------------
+        # RESEARCH
+        # ----------------------------------------------------
 
         if step.tool == "research":
 
@@ -187,11 +258,17 @@ class Executor:
                 step.task
             )
 
+        # ----------------------------------------------------
+        # ANALYSIS
+        # ----------------------------------------------------
+
         if step.tool == "analysis":
 
-            research_context = "\n\n".join(
-                str(result)
-                for result in dependencies.values()
+            research_context = (
+                self.build_dependency_context(
+                    step,
+                    state,
+                )
             )
 
             prompt = f"""
@@ -200,37 +277,48 @@ You are an expert research analyst.
 Task:
 {step.task}
 
-Research results:
+Relevant previous results:
 {research_context}
 
-Analyze the research results carefully.
+Analyze only the information provided.
 
-Do not invent information.
-Clearly distinguish facts from conclusions.
+Requirements:
+- Do not invent information.
+- Clearly distinguish facts from conclusions.
+- Compare the evidence where appropriate.
+- Keep the answer concise.
 """
 
             return self.ask_llm(prompt)
 
+        # ----------------------------------------------------
+        # FINAL
+        # ----------------------------------------------------
+
         if step.tool == "final":
 
-            previous_results = "\n\n".join(
-                str(result)
-                for result in dependencies.values()
+            previous_results = (
+                self.build_dependency_context(
+                    step,
+                    state,
+                )
             )
 
             prompt = f"""
 You are a research assistant.
 
-Prepare the final answer for the original research task.
+Prepare the final answer for this research task:
 
-Use the following research and analysis:
+{step.task}
+
+Use the following previous results:
 
 {previous_results}
 
 Requirements:
 - Be accurate.
 - Do not invent facts.
-- Explain the reasoning clearly.
+- Clearly explain the conclusion.
 - Include source references when available.
 """
 
@@ -239,6 +327,151 @@ Requirements:
         raise ValueError(
             f"Unknown tool: {step.tool}"
         )
+
+    # ========================================================
+    # RETRY
+    # ========================================================
+
+    def execute_with_retry(
+        self,
+        step: PlanStep,
+        state: ExecutionState,
+    ) -> Any:
+
+        for attempt in range(
+            1,
+            MAX_RETRIES + 1,
+        ):
+
+            state.attempts[step.id] = attempt
+
+            print(
+                f"[EXECUTOR] Attempt "
+                f"{attempt}/{MAX_RETRIES}"
+            )
+
+            try:
+
+                result = self.execute_step(
+                    step,
+                    state,
+                )
+
+                print(
+                    f"[EXECUTOR] Step "
+                    f"{step.id} completed."
+                )
+
+                return result
+
+            except Exception as exc:
+
+                error = str(exc)
+
+                print(
+                    f"[EXECUTOR] Step "
+                    f"{step.id} failed: {error}"
+                )
+
+                state.errors[step.id] = error
+
+                if attempt < MAX_RETRIES:
+
+                    print(
+                        "[EXECUTOR] Retrying..."
+                    )
+
+                else:
+
+                    print(
+                        "[EXECUTOR] Retries exhausted."
+                    )
+
+        raise RuntimeError(
+            f"Step {step.id} failed after "
+            f"{MAX_RETRIES} attempts."
+        )
+
+    # ========================================================
+    # REPLANNING
+    # ========================================================
+
+    def replan_step(
+        self,
+        step: PlanStep,
+        state: ExecutionState,
+    ) -> PlanStep:
+
+        error = state.errors.get(
+            step.id,
+            "Unknown failure",
+        )
+
+        prompt = f"""
+You are a recovery planning agent.
+
+A research agent attempted the following task:
+
+Task:
+{step.task}
+
+Tool:
+{step.tool}
+
+It failed with:
+
+{error}
+
+Create ONE replacement task that can accomplish
+the same objective using a different or simpler approach.
+
+Rules:
+- Keep the same step ID.
+- Do not repeat the exact failed approach.
+- Prefer the research tool for information retrieval.
+- Prefer analysis for comparing existing results.
+- Prefer final for final synthesis.
+- Preserve the original dependencies.
+- Return ONLY valid JSON.
+
+JSON format:
+
+{{
+    "id": {step.id},
+    "task": "replacement task",
+    "tool": "{step.tool}",
+    "depends_on": {json.dumps(step.depends_on)}
+}}
+"""
+
+        print(
+            f"[REPLANNER] Replanning step {step.id}..."
+        )
+
+        response = self.ask_llm(
+            prompt,
+            timeout=180,
+        )
+
+        data = json.loads(response)
+
+        replacement = PlanStep.model_validate(
+            data
+        )
+
+        print(
+            f"[REPLANNER] Replacement task:"
+        )
+
+        print(
+            f"[REPLANNER] {replacement.task}"
+        )
+
+        return replacement
+
+    # ========================================================
+    # MAIN EXECUTION LOOP
+    # ========================================================
 
     def run(
         self,
@@ -249,12 +482,21 @@ Requirements:
 
         state.initialize(plan)
 
+        execution_count = 0
+
         while True:
+
+            execution_count += 1
+
+            if execution_count > MAX_STEPS:
+                raise RuntimeError(
+                    "Maximum execution steps exceeded."
+                )
 
             pending_steps = [
                 step
                 for step in plan.steps
-                if state.status[step.id]
+                if state.status.get(step.id)
                 == "pending"
             ]
 
@@ -276,9 +518,11 @@ Requirements:
 
                 try:
 
-                    result = self.execute_step(
-                        step,
-                        state,
+                    result = (
+                        self.execute_with_retry(
+                            step,
+                            state,
+                        )
                     )
 
                     state.mark_completed(
@@ -288,17 +532,80 @@ Requirements:
 
                 except Exception as exc:
 
+                    # ----------------------------------------
+                    # FAILED AFTER RETRIES
+                    # ----------------------------------------
+
                     state.mark_failed(
                         step.id,
                         str(exc),
                     )
 
-                    raise
+                    print(
+                        f"[EXECUTOR] "
+                        f"Step {step.id} requires replanning."
+                    )
+
+                    # ----------------------------------------
+                    # REPLAN
+                    # ----------------------------------------
+
+                    try:
+
+                        replacement = (
+                            self.replan_step(
+                                step,
+                                state,
+                            )
+                        )
+
+                        # Replace the failed task
+                        # with the new task.
+                        step.task = replacement.task
+                        step.tool = replacement.tool
+                        step.depends_on = (
+                            replacement.depends_on
+                        )
+
+                        state.reset_for_retry(
+                            step.id
+                        )
+
+                        print(
+                            f"[EXECUTOR] "
+                            f"Step {step.id} replanned."
+                        )
+
+                    except Exception as replan_error:
+
+                        state.mark_failed(
+                            step.id,
+                            f"Replanning failed: "
+                            f"{replan_error}",
+                        )
+
+                        print(
+                            "[EXECUTOR] "
+                            "Replanning failed."
+                        )
+
+                        raise RuntimeError(
+                            f"Step {step.id} could "
+                            f"not be recovered."
+                        )
 
             if not progress:
 
+                unresolved = [
+                    step.id
+                    for step in plan.steps
+                    if state.status.get(step.id)
+                    == "pending"
+                ]
+
                 raise RuntimeError(
                     "No executable steps remain. "
+                    f"Unresolved steps: {unresolved}. "
                     "Check plan dependencies."
                 )
 
