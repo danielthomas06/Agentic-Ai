@@ -2,7 +2,7 @@ from typing import Any
 
 import requests
 
-from state import MultiAgentState
+from .state import MultiAgentState
 
 import asyncio
 import sys

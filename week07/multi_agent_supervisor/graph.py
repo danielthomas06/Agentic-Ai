@@ -2,9 +2,9 @@ from typing import Literal
 
 from langgraph.graph import StateGraph, START, END
 
-from state import MultiAgentState
-from agents import research_agent, analyst_agent, writer_agent
-from supervisor import supervisor_agent
+from .state import MultiAgentState
+from .agents import research_agent, analyst_agent, writer_agent
+from .supervisor import supervisor_agent
 
 
 MAX_ITERATIONS = 6

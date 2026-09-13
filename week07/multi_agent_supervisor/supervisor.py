@@ -2,7 +2,7 @@ from typing import Any
 
 import requests
 
-from state import MultiAgentState
+from .state import MultiAgentState
 
 
 MODEL = "qwen2.5:7b"
