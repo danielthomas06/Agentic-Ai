@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+requests
+pydantic
+langgraph
+langchain-mcp-adapters
+mcp
+chromadb
+sentence-transformers
+rank-bm25
+pypdf

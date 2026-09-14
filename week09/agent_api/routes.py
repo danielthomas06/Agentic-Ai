@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .schemas import AgentRequest, AgentResponse
 from .service import get_trace, run_agent
-
+import traceback
 
 router = APIRouter()
 
@@ -36,10 +36,12 @@ def run_agent_endpoint(
             detail=str(exc),
         ) from exc
 
-    except Exception:
+    except Exception as exc:
+        print(f"[AGENT ERROR] {type(exc).__name__}: {exc}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
-            detail="Agent execution failed.",
+            detail=f"Agent execution failed: {type(exc).__name__}: {exc}",
         )
 
 

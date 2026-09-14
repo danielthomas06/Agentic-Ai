@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.venv
+venv
+env
+.env
+logs
+*.log
+chroma_db
+week03/research_agent_v2/chroma_db

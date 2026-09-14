@@ -1,7 +1,7 @@
 from typing import Any
 
 import requests
-
+import os
 from .state import MultiAgentState
 
 import asyncio
@@ -13,7 +13,10 @@ from mcp.client.stdio import stdio_client
 
 
 MODEL = "qwen2.5:7b"
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = os.getenv(
+    "OLLAMA_URL",
+    "http://localhost:11434/api/chat"
+)
 TIMEOUT = 300
 
 
