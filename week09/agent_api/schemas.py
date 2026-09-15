@@ -7,6 +7,7 @@ class AgentRequest(BaseModel):
     goal: str = Field(
         ...,
         min_length=3,
+        max_length=2000,
         description="The goal or question for the multi-agent system.",
     )
 

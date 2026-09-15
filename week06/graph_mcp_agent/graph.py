@@ -88,7 +88,6 @@ def planner_node(
 # ============================================================
 # RESEARCH
 # ============================================================
-
 def research_node(
     state: AgentState,
 ) -> dict[str, Any]:
@@ -108,6 +107,7 @@ def research_node(
             "search_knowledge_base",
             {
                 "query": goal,
+                "agent_role": "research",
             },
         )
     )

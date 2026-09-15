@@ -1,0 +1,2 @@
+{"timestamp": "2026-09-14T17:10:17.130358+00:00", "event": "input_validation", "request_id": null, "role": null, "capability": null, "outcome": "denied", "reason": "goal_too_long", "metadata": {"length": 2001}}
+{"timestamp": "2026-09-14T17:10:31.921520+00:00", "event": "input_validation", "request_id": null, "role": null, "capability": null, "outcome": "denied", "reason": "potential_prompt_injection", "metadata": {}}
